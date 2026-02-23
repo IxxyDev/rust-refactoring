@@ -53,7 +53,7 @@ pub fn read_log<R: std::io::Read>(input: R, mode: ReadMode, request_ids: &[u32])
     // исправлено: итераторы вместо ручного цикла
     Ok(logs
         .filter(|log| {
-            request_ids.is_empty() || request_ids.iter().any(|&id| id == log.request_id)
+            request_ids.is_empty() || request_ids.contains(&log.request_id)
         })
         .filter(|log| {
             // исправлено: match вместо цепочки if/else if

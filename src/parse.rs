@@ -44,20 +44,6 @@ mod stdp { // parsers for std types
             ))
         }
     }
-    /// Знаковые числа
-    #[derive(Debug)]
-    pub struct I32;
-    impl Parser for I32 {
-        type Dest = std::num::NonZeroI32;
-        fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
-            let end_idx = input.char_indices().skip(1)
-                               .find_map(|(idx, c)| (!c.is_ascii_digit()).then_some(idx))
-                               .unwrap_or(input.len());
-            let value: i32 = input[..end_idx].parse().map_err(|_| ())?;
-            let value = std::num::NonZeroI32::new(value).ok_or(())?;
-            Ok((&input[end_idx..], value))
-        }
-    }
     /// Шестнадцатеричные байты (пригодится при парсинге блобов)
     #[derive(Debug, Clone)]
     pub struct Byte;
@@ -74,22 +60,9 @@ mod stdp { // parsers for std types
     }
 }
 
-/// Обернуть строку в кавычки, экранировав кавычки, которые в строке уже есть
-fn quote (input: &str) -> String {
-    let mut result = String::from("\"");
-    result.extend(input.chars()
-        .map(|c| match c {
-            '\\' | '"' => ['\\', c].into_iter().take(2),
-            _ => [c, ' '].into_iter().take(1)
-        })
-        .flatten()
-    );
-    result.push('"');
-    result
-}
 /// Распарсить строку, которую ранее [обернули в кавычки](quote)
 // `"abc\"def\\ghi"nice` -> (`abcd"def\ghi`, `nice`)
-fn do_unquote<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
+fn do_unquote(input: &str) -> Result<(&str, String), ()> {
     let mut result = String::new();
     let mut escaped_now = false;
     let mut chars = input.strip_prefix("\"").ok_or(())?.chars();
@@ -111,7 +84,7 @@ fn do_unquote<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
 }
 /// Распарсить строку, обёрную в кавычки
 /// (сокращённая версия [do_unquote], в которой вложенные кавычки не предусмотрены)
-fn do_unquote_non_escaped<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
+fn do_unquote_non_escaped(input: &str) -> Result<(&str, String), ()> {
     let input = input.strip_prefix("\"").ok_or(())?;
     let quote_byteidx = input.find('"').ok_or(())?;
     if 0 == quote_byteidx || Some("\\") == input.get(quote_byteidx - 1..quote_byteidx) {
@@ -131,15 +104,6 @@ impl Parser for Unquote {
 /// Конструктор [Unquote]
 fn unquote() -> Unquote {
     Unquote
-}
-/// Парсер, возвращающий результат как есть
-#[derive(Debug, Clone)]
-struct AsIs;
-impl Parser for AsIs {
-    type Dest = String;
-    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
-        Ok((&input[input.len()..], input.into()))
-    }
 }
 /// Парсер константных строк
 /// (аналог `nom::bytes::complete::tag`)
@@ -304,11 +268,6 @@ where A0: Parser,
         )
     }
 }
-/// Конструктор [All] для трёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
-fn all3<A0: Parser, A1: Parser, A2: Parser>(a0: A0, a1: A1, a2: A2) -> All<(A0,A1,A2)> {
-    All { parser: (a0, a1, a2) }
-}
 impl<A0,A1,A2,A3> Parser for All<(A0,A1,A2,A3)>
 where A0: Parser,
       A1: Parser,
@@ -325,17 +284,14 @@ where A0: Parser,
         )
     }
 }
-/// Конструктор [All] для четырёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
-fn all4<A0: Parser, A1: Parser, A2: Parser, A3: Parser>(a0: A0, a1: A1, a2: A2, a3: A3) -> All<(A0,A1,A2,A3)> {
-    All { parser: (a0, a1, a2, a3) }
-}
 /// Комбинатор, который вытаскивает значения из пары `"ключ":значение,`.
 /// Для простоты реализации, запятая всегда нужна в конце пары ключ-значение,
 /// простое '"ключ":значение' читаться не будет
+type KeyValueParser<T> = Delimited<All<(StripWhitespace<QuotedTag>,StripWhitespace<Tag>)>,StripWhitespace<T>,StripWhitespace<Tag>>;
+
 #[derive(Debug, Clone)]
 struct KeyValue<T> {
-    parser: Delimited<All<(StripWhitespace<QuotedTag>,StripWhitespace<Tag>)>,StripWhitespace<T>,StripWhitespace<Tag>>
+    parser: KeyValueParser<T>
 }
 impl<T> Parser for KeyValue<T>
 where T: Parser {
@@ -549,49 +505,6 @@ where A0: Parser<Dest=Dest>,
 fn alt4<Dest,A0: Parser<Dest=Dest>,A1: Parser<Dest=Dest>, A2: Parser<Dest=Dest>, A3: Parser<Dest=Dest>>(a0: A0, a1: A1, a2: A2, a3: A3) -> Alt<(A0,A1,A2,A3)> {
     Alt{parser:(a0, a1, a2, a3)}
 }
-impl<A0,A1,A2,A3,A4,A5,A6,A7,Dest> Parser for Alt<(A0,A1,A2,A3,A4,A5,A6,A7)>
-where A0: Parser<Dest=Dest>,
-      A1: Parser<Dest=Dest>,
-      A2: Parser<Dest=Dest>,
-      A3: Parser<Dest=Dest>,
-      A4: Parser<Dest=Dest>,
-      A5: Parser<Dest=Dest>,
-      A6: Parser<Dest=Dest>,
-      A7: Parser<Dest=Dest>,
-{
-    type Dest = Dest;
-    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
-        // исправлено: &str — clone() не нужен
-        if let Ok(ok) = self.parser.0.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.1.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.2.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.3.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.4.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.5.parse(input) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.6.parse(input) {
-            return Ok(ok);
-        }
-        self.parser.7.parse(input)
-    }
-}
-/// Конструктор [Alt] для восьми парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
-fn alt8<Dest,A0: Parser<Dest=Dest>,A1: Parser<Dest=Dest>, A2: Parser<Dest=Dest>, A3: Parser<Dest=Dest>,A4:Parser<Dest=Dest>,A5:Parser<Dest=Dest>,A6:Parser<Dest=Dest>,A7:Parser<Dest=Dest>>(a0: A0, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5, a6: A6, a7: A7) -> Alt<(A0,A1,A2,A3,A4,A5,A6,A7)> {
-    Alt{parser:(a0, a1, a2, a3, a4, a5, a6, a7)}
-}
-
 /// Комбинатор для применения дочернего парсера N раз
 /// (аналог `take` из `nom`)
 struct Take<T> {
@@ -626,30 +539,6 @@ impl Parsable for AuthData {
     type Parser = Map<Take<stdp::Byte>,fn(Vec<u8>)->Self>;
     fn parser () -> Self::Parser {
         map(take(AUTHDATA_SIZE, stdp::Byte), |authdata| AuthData(authdata.try_into().unwrap_or([0;AUTHDATA_SIZE])))
-    }
-}
-
-/// Конструкция 'либо-либо'
-enum Either<Left,Right> {
-    Left(Left),
-    Right(Right),
-}
-
-/// Статус, которые можно парсить
-enum Status {
-    Ok,
-    Err(String),
-}
-impl Parsable for Status {
-    type Parser = Alt<(Map<Tag,fn(())->Self>,Map<Delimited<Tag,Unquote,Tag>,fn(String)->Self>)>;
-    fn parser () -> Self::Parser {
-        fn to_ok(_: ()) -> Status {
-            Status::Ok
-        }
-        fn to_err(error: String) -> Status {
-            Status::Err(error)
-        }
-        alt2(map(tag("Ok"), to_ok),map(delimited(tag("Err("),unquote(),tag(")")), to_err))
     }
 }
 
@@ -791,9 +680,13 @@ fn just_parse<T: Parsable>(input: &str) -> Result<(&str, T), ()> {
     T::parser().parse(input)
 }
 
+/// Ошибка парсинга
+#[derive(Debug)]
+pub struct ParseError;
+
 /// Парсинг [списка объявлений](Announcements)
-pub fn just_parse_anouncements(input: &str) -> Result<(&str, Announcements), ()> {
-    just_parse::<Announcements>(input)
+pub fn just_parse_anouncements(input: &str) -> Result<(&str, Announcements), ParseError> {
+    just_parse::<Announcements>(input).map_err(|()| ParseError)
 }
 
 /// Все виды логов
@@ -868,14 +761,14 @@ impl Parsable for SystemLogErrorKind {
                         strip_whitespace(tag("NetworkError")),
                         strip_whitespace(unquote())
                     ),
-                    |error| SystemLogErrorKind::NetworkError(error)
+                    SystemLogErrorKind::NetworkError
                 ),
                 map(
                     preceded(
                         strip_whitespace(tag("AccessDenied")),
                         strip_whitespace(unquote())
                     ),
-                    |error| SystemLogErrorKind::AccessDenied(error)
+                    SystemLogErrorKind::AccessDenied
                 )
             )
         )
@@ -895,14 +788,14 @@ impl Parsable for SystemLogTraceKind {
                         strip_whitespace(tag("SendRequest")),
                         strip_whitespace(unquote())
                     ),
-                    |request| SystemLogTraceKind::SendRequest(request)
+                    SystemLogTraceKind::SendRequest
                 ),
                 map(
                     preceded(
                         strip_whitespace(tag("GetResponse")),
                         strip_whitespace(unquote())
                     ),
-                    |response| SystemLogTraceKind::GetResponse(response)
+                    SystemLogTraceKind::GetResponse
                 )
             )
         )
@@ -914,8 +807,8 @@ impl Parsable for SystemLogKind {
         strip_whitespace(preceded(
             tag("System::"),
             alt2(
-                map(SystemLogTraceKind::parser(), |trace| SystemLogKind::Trace(trace)),
-                map(SystemLogErrorKind::parser(), |error| SystemLogKind::Error(error))
+                map(SystemLogTraceKind::parser(), SystemLogKind::Trace),
+                map(SystemLogErrorKind::parser(), SystemLogKind::Error)
             )
         ))
     }
@@ -934,14 +827,14 @@ impl Parsable for AppLogErrorKind {
                         strip_whitespace(tag("LackOf")),
                         strip_whitespace(unquote())
                     ),
-                    |error| AppLogErrorKind::LackOf(error)
+                    AppLogErrorKind::LackOf
                 ),
                 map(
                     preceded(
                         strip_whitespace(tag("SystemError")),
                         strip_whitespace(unquote())
                     ),
-                    |error| AppLogErrorKind::SystemError(error)
+                    AppLogErrorKind::SystemError
                 )
             )
         )
@@ -970,21 +863,21 @@ impl Parsable for AppLogTraceKind {
                         strip_whitespace(tag("SendRequest")),
                         strip_whitespace(unquote())
                     ),
-                    |trace| AppLogTraceKind::SendRequest(trace)
+                    AppLogTraceKind::SendRequest
                 ),
                 map(
                     preceded(
                         strip_whitespace(tag("Check")),
                         strip_whitespace(Announcements::parser())
                     ),
-                    |announcements| AppLogTraceKind::Check(announcements)
+                    AppLogTraceKind::Check
                 ),
                 map(
                     preceded(
                         strip_whitespace(tag("GetResponse")),
                         strip_whitespace(unquote())
                     ),
-                    |trace| AppLogTraceKind::GetResponse(trace)
+                    AppLogTraceKind::GetResponse
                 ),
             )
         )
@@ -992,74 +885,82 @@ impl Parsable for AppLogTraceKind {
 }
 impl Parsable for AppLogJournalKind {
     type Parser = Preceded<Tag, Alt<(
-        Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<stdp::U32>)>,Tag>>,fn((String,std::num::NonZeroU32))->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,KeyValue<Unquote>,Tag>>,fn(String)->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<Unquote>,KeyValue<stdp::U32>)>,Tag>>,fn((String,String,std::num::NonZeroU32))->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<Unquote>)>,Tag>>,fn((String,String))->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,<UserCash as Parsable>::Parser>,fn(UserCash)->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,<UserCash as Parsable>::Parser>,fn(UserCash)->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,<UserBacket as Parsable>::Parser>,fn(UserBacket)->AppLogJournalKind>,
-        Map<Preceded<StripWhitespace<Tag>,<UserBacket as Parsable>::Parser>,fn(UserBacket)->AppLogJournalKind>,
+        Alt<(
+            Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<stdp::U32>)>,Tag>>,fn((String,std::num::NonZeroU32))->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,KeyValue<Unquote>,Tag>>,fn(String)->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<Unquote>,KeyValue<stdp::U32>)>,Tag>>,fn((String,String,std::num::NonZeroU32))->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,Delimited<Tag,Permutation<(KeyValue<Unquote>,KeyValue<Unquote>)>,Tag>>,fn((String,String))->AppLogJournalKind>,
+        )>,
+        Alt<(
+            Map<Preceded<StripWhitespace<Tag>,<UserCash as Parsable>::Parser>,fn(UserCash)->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,<UserCash as Parsable>::Parser>,fn(UserCash)->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,<UserBacket as Parsable>::Parser>,fn(UserBacket)->AppLogJournalKind>,
+            Map<Preceded<StripWhitespace<Tag>,<UserBacket as Parsable>::Parser>,fn(UserBacket)->AppLogJournalKind>,
+        )>,
     )>>;
     fn parser () -> Self::Parser {
         preceded(
             tag("Journal"),
-            alt8(
-                map(
-                    preceded(
-                        strip_whitespace(tag("CreateUser")),
-                        delimited(tag("{"), permutation2(key_value("user_id", unquote()), key_value("authorized_capital", stdp::U32)), tag("}"))
+            alt2(
+                alt4(
+                    map(
+                        preceded(
+                            strip_whitespace(tag("CreateUser")),
+                            delimited(tag("{"), permutation2(key_value("user_id", unquote()), key_value("authorized_capital", stdp::U32)), tag("}"))
+                        ),
+                        |(user_id,authorized_capital)| AppLogJournalKind::CreateUser{user_id,authorized_capital: authorized_capital.get()}
                     ),
-                    |(user_id,authorized_capital)| AppLogJournalKind::CreateUser{user_id,authorized_capital: authorized_capital.get()}
+                    map(
+                        preceded(
+                            strip_whitespace(tag("DeleteUser")),
+                            delimited(tag("{"), key_value("user_id", unquote()), tag("}"))
+                        ),
+                        |user_id| AppLogJournalKind::DeleteUser{user_id}
+                    ),
+                    map(
+                        preceded(
+                            strip_whitespace(tag("RegisterAsset")),
+                            delimited(tag("{"), permutation3(key_value("asset_id", unquote()), key_value("user_id", unquote()), key_value("liquidity", stdp::U32)), tag("}"))
+                        ),
+                        |(asset_id, user_id, liquidity)| AppLogJournalKind::RegisterAsset { asset_id, user_id, liquidity: liquidity.get() }
+                    ),
+                    map(
+                        preceded(
+                            strip_whitespace(tag("UnregisterAsset")),
+                            delimited(tag("{"), permutation2(key_value("asset_id", unquote()), key_value("user_id", unquote())), tag("}"))
+                        ),
+                        |(asset_id, user_id)| AppLogJournalKind::UnregisterAsset { asset_id, user_id }
+                    ),
                 ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("DeleteUser")),
-                        delimited(tag("{"), key_value("user_id", unquote()), tag("}"))
+                alt4(
+                    map(
+                        preceded(
+                            strip_whitespace(tag("DepositCash")),
+                            UserCash::parser()
+                        ),
+                        AppLogJournalKind::DepositCash
                     ),
-                    |user_id| AppLogJournalKind::DeleteUser{user_id}
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("RegisterAsset")),
-                        delimited(tag("{"), permutation3(key_value("asset_id", unquote()), key_value("user_id", unquote()), key_value("liquidity", stdp::U32)), tag("}"))
+                    map(
+                        preceded(
+                            strip_whitespace(tag("WithdrawCash")),
+                            UserCash::parser()
+                        ),
+                        AppLogJournalKind::WithdrawCash
                     ),
-                    |(asset_id, user_id, liquidity)| AppLogJournalKind::RegisterAsset { asset_id, user_id, liquidity: liquidity.get() }
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("UnregisterAsset")),
-                        delimited(tag("{"), permutation2(key_value("asset_id", unquote()), key_value("user_id", unquote())), tag("}"))
+                    map(
+                        preceded(
+                            strip_whitespace(tag("BuyAsset")),
+                            UserBacket::parser()
+                        ),
+                        AppLogJournalKind::BuyAsset
                     ),
-                    |(asset_id, user_id)| AppLogJournalKind::UnregisterAsset { asset_id, user_id }
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("DepositCash")),
-                        UserCash::parser()
+                    map(
+                        preceded(
+                            strip_whitespace(tag("SellAsset")),
+                            UserBacket::parser()
+                        ),
+                        AppLogJournalKind::SellAsset
                     ),
-                    |user_cash| AppLogJournalKind::DepositCash (user_cash)
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("WithdrawCash")),
-                        UserCash::parser()
-                    ),
-                    |user_cash| AppLogJournalKind::WithdrawCash (user_cash)
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("BuyAsset")),
-                        UserBacket::parser()
-                    ),
-                    |user_backet| AppLogJournalKind::BuyAsset(user_backet)
-                ),
-                map(
-                    preceded(
-                        strip_whitespace(tag("SellAsset")),
-                        UserBacket::parser()
-                    ),
-                    |user_backet| AppLogJournalKind::SellAsset(user_backet)
                 ),
             )
         )
@@ -1075,9 +976,9 @@ impl Parsable for AppLogKind {
         strip_whitespace(preceded(
             tag("App::"),
             alt3(
-                map(AppLogErrorKind::parser(), |error| AppLogKind::Error(error)),
-                map(AppLogTraceKind::parser(), |trace| AppLogKind::Trace(trace)),
-                map(AppLogJournalKind::parser(), |journal| AppLogKind::Journal(journal)),
+                map(AppLogErrorKind::parser(), AppLogKind::Error),
+                map(AppLogTraceKind::parser(), AppLogKind::Trace),
+                map(AppLogJournalKind::parser(), AppLogKind::Journal),
             )
         ))
     }
@@ -1089,8 +990,8 @@ impl Parsable for LogKind {
     )>>;
     fn parser () -> Self::Parser {
         strip_whitespace(alt2(
-            map(SystemLogKind::parser(), |system| LogKind::System(system)),
-            map(AppLogKind::parser(), |app| LogKind::App(app)),
+            map(SystemLogKind::parser(), LogKind::System),
+            map(AppLogKind::parser(), LogKind::App),
         ))
     }
 }
@@ -1119,13 +1020,41 @@ impl Parsable for LogLine {
 // исправлено: singleton удалён, парсер создаётся по требованию;
 // публичная функция скрывает внутренние типы парсера
 /// Распарсить строку лога
-pub fn parse_log_line(input: &str) -> Result<(&str, LogLine), ()> {
-    <LogLine as Parsable>::parser().parse(input)
+pub fn parse_log_line(input: &str) -> Result<(&str, LogLine), ParseError> {
+    <LogLine as Parsable>::parser().parse(input).map_err(|()| ParseError)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// Знаковые числа (используется только в тестах)
+    #[derive(Debug)]
+    pub struct I32;
+    impl Parser for I32 {
+        type Dest = std::num::NonZeroI32;
+        fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+            let end_idx = input.char_indices().skip(1)
+                               .find_map(|(idx, c)| (!c.is_ascii_digit()).then_some(idx))
+                               .unwrap_or(input.len());
+            let value: i32 = input[..end_idx].parse().map_err(|_| ())?;
+            let value = std::num::NonZeroI32::new(value).ok_or(())?;
+            Ok((&input[end_idx..], value))
+        }
+    }
+
+    /// Обернуть строку в кавычки, экранировав кавычки, которые в строке уже есть
+    fn quote(input: &str) -> String {
+        let mut result = String::from("\"");
+        result.extend(input.chars()
+            .flat_map(|c| match c {
+                '\\' | '"' => ['\\', c].into_iter().take(2),
+                _ => [c, ' '].into_iter().take(1)
+            })
+        );
+        result.push('"');
+        result
+    }
 
     #[test]
     fn test_u32() {
@@ -1140,12 +1069,12 @@ mod test {
 
     #[test]
     fn test_i32() {
-        assert_eq!(stdp::I32.parse("411"), Ok(("", std::num::NonZeroI32::new(411).unwrap())));
-        assert_eq!(stdp::I32.parse("411ab"), Ok(("ab", std::num::NonZeroI32::new(411).unwrap())));
-        assert_eq!(stdp::I32.parse(""), Err(()));
-        assert_eq!(stdp::I32.parse("-3"), Ok(("", std::num::NonZeroI32::new(-3).unwrap())));
-        assert_eq!(stdp::I32.parse("0x03"), Err(()));
-        assert_eq!(stdp::I32.parse("-"), Err(()));
+        assert_eq!(I32.parse("411"), Ok(("", std::num::NonZeroI32::new(411).unwrap())));
+        assert_eq!(I32.parse("411ab"), Ok(("ab", std::num::NonZeroI32::new(411).unwrap())));
+        assert_eq!(I32.parse(""), Err(()));
+        assert_eq!(I32.parse("-3"), Ok(("", std::num::NonZeroI32::new(-3).unwrap())));
+        assert_eq!(I32.parse("0x03"), Err(()));
+        assert_eq!(I32.parse("-"), Err(()));
     }
 
     #[test]
